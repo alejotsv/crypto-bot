@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+exit_state.json
+auto_entry_spend_state.json
+telegram_state.json
+logs/
