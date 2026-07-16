@@ -81,7 +81,7 @@ class CloseResult:
 @dataclass(frozen=True)
 class ReconcileAction:
     symbol: str
-    action: Literal["TAKE_PROFIT_REALIZED", "FORCED_MARKET_SELL"]
+    action: Literal["STOP_LOSS_FILLED", "TAKE_PROFIT_REALIZED", "FORCED_MARKET_SELL"]
     detail: str
 
 
@@ -188,7 +188,13 @@ def check_and_reconcile_exits(
         stop_loss_status = str(stop_loss_order.status).split(".")[-1].lower()
 
         if stop_loss_status == "filled":
-            # Stop-loss realized on its own -- nothing left to do.
+            actions.append(ReconcileAction(
+                symbol=symbol, action="STOP_LOSS_FILLED",
+                detail=(
+                    f"stop-loss filled at {stop_loss_order.filled_avg_price} "
+                    f"(qty {stop_loss_order.filled_qty})"
+                ),
+            ))
             remove_protective_orders(symbol)
             continue
 

@@ -195,18 +195,29 @@ def test_attach_protective_orders_wraps_api_error_without_leaking_secret(monkeyp
     assert "dummy-secret" not in str(exc_info.value)
 
 
-def make_status_order(status, stop_price=None, qty=None):
-    return Mock(status=status, stop_price=stop_price, qty=qty)
+def make_status_order(status, stop_price=None, qty=None, filled_avg_price=None, filled_qty=None):
+    return Mock(
+        status=status,
+        stop_price=stop_price,
+        qty=qty,
+        filled_avg_price=filled_avg_price,
+        filled_qty=filled_qty,
+    )
 
 
-def test_reconcile_does_nothing_when_stop_loss_filled_on_its_own():
+def test_reconcile_notifies_and_cleans_up_when_stop_loss_filled_on_its_own():
     exit_state.record_protective_orders("BTC/USD", "sl-1", "65000", "moderate")
     client = Mock()
-    client.get_order_by_id.return_value = make_status_order("OrderStatus.FILLED")
+    client.get_order_by_id.return_value = make_status_order(
+        "OrderStatus.FILLED", filled_avg_price="63750", filled_qty="0.5"
+    )
 
     result = exits.check_and_reconcile_exits(client, Mock())
 
-    assert result == []
+    assert len(result) == 1
+    assert result[0].action == "STOP_LOSS_FILLED"
+    assert "63750" in result[0].detail
+    assert "0.5" in result[0].detail
     client.cancel_order_by_id.assert_not_called()
     client.submit_order.assert_not_called()
     assert exit_state.load_state() == {}

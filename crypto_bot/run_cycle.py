@@ -21,6 +21,18 @@ from crypto_bot.telegram_state import load_last_update_id, save_last_update_id
 
 logger = logging.getLogger(__name__)
 
+# Telegram-facing text only -- log lines keep the raw action code (grep-able,
+# matches the AutoEntryResult/ReconcileAction Literal values in tests).
+_ENTRY_MESSAGES = {
+    "ENTERED": "Entered",
+    "SKIPPED_INSUFFICIENT_FUNDS": "Skipped (insufficient funds)",
+}
+_RECONCILE_MESSAGES = {
+    "STOP_LOSS_FILLED": "Stop-loss hit",
+    "TAKE_PROFIT_REALIZED": "Take-profit hit",
+    "FORCED_MARKET_SELL": "Stop-loss forced (backstop)",
+}
+
 
 def _process_telegram_commands(client, data_client, settings) -> None:
     """Fetches new Telegram updates, replies to each command from the
@@ -66,14 +78,20 @@ def run_reconcile_cycle() -> None:
                 logger.info(
                     "Auto-entry cycle: %s %s -- %s", result.symbol, result.action, result.detail
                 )
-                _notify(settings, f"Auto-entry {result.action}: {result.symbol} -- {result.detail}")
+                _notify(
+                    settings,
+                    f"{_ENTRY_MESSAGES[result.action]}: {result.symbol} -- {result.detail}",
+                )
 
     actions = check_and_reconcile_exits(client, data_client)
     if not actions:
         logger.info("Reconcile cycle: no action needed.")
     for action in actions:
         logger.info("Reconcile cycle: %s %s -- %s", action.symbol, action.action, action.detail)
-        _notify(settings, f"Reconcile {action.action}: {action.symbol} -- {action.detail}")
+        _notify(
+            settings,
+            f"{_RECONCILE_MESSAGES[action.action]}: {action.symbol} -- {action.detail}",
+        )
 
 
 def _notify(settings, text: str) -> None:

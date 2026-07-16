@@ -15,10 +15,43 @@ is created, approved, or implemented. Status values: `Not started`,
 | 7 | Scheduled monitoring (cron, every 2 minutes) | `specs/features/007-scheduled-monitoring.md` | Done (code/docs; actual Pi deployment is the user's manual step) |
 | 8 | Manual close, and a safe combined open-and-protect action | `specs/features/008-manual-close-and-safe-open.md` | Done |
 | 9 | Automated entry strategy | `specs/features/009-auto-entry-strategy.md` | Done |
-| 10 | Telegram two-way bot (commands + notifications) | `specs/features/010-telegram-bot.md` | In Progress |
+| 10 | Telegram two-way bot (commands + notifications) | `specs/features/010-telegram-bot.md` | Done |
 
 ## Notes
 
+- **2026-07-13, feature 9's entry signal replaced (ADR 0007):** the
+  original 5/20 SMA crossover backtested below breakeven (28.3% win
+  rate vs. 33.3% needed); an ad-hoc "regime filter + pullback" fix
+  looked promising but failed out-of-sample. Broadened to test 9
+  established, documented entry strategies (Donchian breakout,
+  ADX-filtered trend, RSI(2) mean-reversion, MACD, Bollinger squeeze
+  breakout, VWAP reversion, opening-range breakout) across 3
+  non-overlapping 90-day windows — **none reliably beat breakeven across
+  all 3**. Switched to Bollinger squeeze breakout as the best-performing
+  candidate found (35.1% average win rate), with an explicit caveat: it
+  still fell short of breakeven (28.4%) in the one adverse window that
+  broke every strategy tested. See ADR 0007 for full rationale;
+  `crypto_bot/strategy.py` and `tests/test_strategy.py` updated
+  accordingly, all 131 tests pass.
+- **Open follow-up, not yet investigated:** every one of the 9 entry
+  strategies tested for the above — trend-following and mean-reversion
+  alike — failed specifically in the same historical window
+  (2026-01-14 to 2026-04-14). Worth understanding what characterized
+  that period (e.g. realized volatility, a broad market-wide drawdown,
+  low trend persistence generally) to see whether a regime-detection
+  filter (sit out clearly adverse conditions rather than trade through
+  them with any entry rule) is a more promising direction than another
+  entry signal. Full backtest methodology and per-strategy results are
+  in `LOCAL_NOTES.md` (gitignored, local machine only).
+- **2026-07-12, feature 10 (Telegram bot) marked Done:** the last open
+  acceptance criterion (live verification) was blocked on real
+  `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`/`DEFAULT_ORDER_NOTIONAL` values,
+  which are now set in `.env`. User confirmed live: `/positions` and
+  `/buy BTC 100` both worked from Telegram, and `send_message`
+  notifications were received for two real auto-entry trades after
+  `AUTO_ENTRY_ENABLED` was flipped to `true` (previously `false`, which
+  is why the bot hadn't auto-entered in its first 9 hours running).
+  All 10 backlog features now Done.
 - **2026-07-11, feature 9 amended post-implementation (ADR 0006):**
   optional total ($1000 default) / daily ($200 default) spending caps
   added on top of the live buying-power check, at the user's explicit

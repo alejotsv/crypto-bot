@@ -160,15 +160,21 @@ reconciliation check below:
 
 `BTC/USD`, `ETH/USD`, `AAVE/USD`, `UNI/USD`, `PAXG/USD`, `XRP/USD`
 
-The signal: a 5-period simple moving average of 5-minute closes crossing
-above the 20-period average. If true, no position is already open for
-that symbol, and the account's real spendable cash (Alpaca's
-`non_marginable_buying_power` — the correct field for crypto, since
-crypto trading is spot/cash-only and `buying_power` is inflated by the
-equities margin multiplier) covers `AUTO_ENTRY_NOTIONAL`, it opens a
-protected position exactly like a manual
-`open_protected_position` call — stop-loss attached instantly, `tier`
-fixed at `moderate`.
+The signal (see `specs/adr/0007-bollinger-squeeze-breakout-entry-signal.md`
+for why this replaced the original 5/20 SMA crossover): a Bollinger Band
+squeeze breakout on hourly bars — Bollinger Bands (20-period basis, ±2
+standard deviations) contracting fully inside a Keltner Channel (same
+basis, ±1.5× the 14-period ATR) is a low-volatility "squeeze"; the
+signal fires on the specific hour that squeeze releases (bands expand
+back outside the channel), provided the live price is above the basis
+line at that moment (confirms an upward breakout, not a downward one).
+If true, no position is already open for that symbol, and the account's
+real spendable cash (Alpaca's `non_marginable_buying_power` — the
+correct field for crypto, since crypto trading is spot/cash-only and
+`buying_power` is inflated by the equities margin multiplier) covers
+`AUTO_ENTRY_NOTIONAL`, it opens a protected position exactly like a
+manual `open_protected_position` call — stop-loss attached instantly,
+`tier` fixed at `moderate`.
 
 The primary spending gate is always the live buying-power check above —
 every attempt checks real account funds fresh, so it can't drift out of

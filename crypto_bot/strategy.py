@@ -1,8 +1,17 @@
 """Automated entry strategy: decides *when* to open a position, using a
-plain rule-based signal (5/20-period SMA crossover on 5-minute bars)
-across a fixed, deliberately curated list of 6 symbols. See spec 009 for
-why these symbols and why a live buying-power check instead of a
-locally-tracked budget counter.
+Bollinger Band squeeze-breakout signal on hourly bars, across a fixed,
+deliberately curated list of 6 symbols. See spec 009 and its 2026-07-13
+amendment for why this replaced the original 5/20 SMA crossover, and
+`LOCAL_NOTES.md` (gitignored, local machine only) for the full multi-
+window backtest record behind the decision.
+
+Signal: John Bollinger's Bollinger Bands (1980s) combined with the "TTM
+Squeeze" concept popularized by John Carter ("Mastering the Trade",
+2006) -- a low-volatility contraction (Bollinger Bands sitting fully
+inside the Keltner Channel) followed by the bands expanding back outside
+it signals an imminent directional move. Enter only on the hour that
+release happens, and only if price is above the basis line (confirms
+upward direction, not downward).
 
 Every entry goes through `trading.open_protected_position` (feature 8)
 -- the same function a manual Telegram `/buy` command calls -- so an
@@ -17,8 +26,8 @@ from typing import Literal
 
 from alpaca.common.exceptions import APIError
 from alpaca.data.historical.crypto import CryptoHistoricalDataClient
-from alpaca.data.requests import CryptoBarsRequest
-from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+from alpaca.data.requests import CryptoBarsRequest, CryptoLatestQuoteRequest
+from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 
 from crypto_bot.auto_entry_spend import effective_daily_spent, load_state, record_spend, save_state
@@ -27,47 +36,111 @@ from crypto_bot.trading import TradingError, open_protected_position
 
 AUTO_ENTRY_SYMBOLS = ["BTC/USD", "ETH/USD", "AAVE/USD", "UNI/USD", "PAXG/USD", "XRP/USD"]
 
-BAR_TIMEFRAME = TimeFrame(5, TimeFrameUnit.Minute)
-BAR_DURATION = timedelta(minutes=5)
-DEFAULT_CLOSES_COUNT = 20
+BB_PERIOD = 20
+BB_STD_MULTIPLIER = Decimal("2")
+KC_ATR_PERIOD = 14
+KC_ATR_MULTIPLIER = Decimal("1.5")
+# Need BB_PERIOD bars for the *prior* hour's rolling window, plus one more
+# bar for the *current* hour's window, to detect a squeeze-on -> squeeze-off
+# transition rather than a single-hour snapshot.
+MIN_HOURLY_BARS = BB_PERIOD + 1
+DEFAULT_HOURLY_FETCH_COUNT = 30
 
 
 class StrategyError(Exception):
-    """Raised when Alpaca rejects or fails a bars/account request."""
+    """Raised when Alpaca rejects or fails a bars/account/quote request."""
 
 
-def get_recent_closes(
-    data_client: CryptoHistoricalDataClient, symbol: str, count: int = DEFAULT_CLOSES_COUNT
-) -> list[Decimal]:
-    """Fetches the last `count` *complete* 5-minute bars' close prices,
-    oldest-to-newest.
+def get_recent_hourly_bars(
+    data_client: CryptoHistoricalDataClient, symbol: str, count: int = DEFAULT_HOURLY_FETCH_COUNT
+) -> list:
+    """Fetches the last `count` *complete* hourly bars, oldest-to-newest.
 
-    Alpaca returns the current, still-accumulating bar as the last
-    element of the series with an artificially low volume/partial data
-    (confirmed live 2026-07-11) -- it must be dropped, or a misleadingly
-    volatile partial candle feeds into the average.
+    Same still-forming-bar exclusion as the project's other bar fetches
+    (`exits.get_atr`, the prior `get_recent_closes`) -- Alpaca includes
+    the current, still-accumulating hour as the last element.
     """
     request = CryptoBarsRequest(
         symbol_or_symbols=symbol,
-        timeframe=BAR_TIMEFRAME,
-        start=datetime.now(timezone.utc) - (BAR_DURATION * (count + 2)),
+        timeframe=TimeFrame.Hour,
+        start=datetime.now(timezone.utc) - timedelta(hours=count + 2),
     )
     try:
         bars = data_client.get_crypto_bars(request).data.get(symbol, [])
     except APIError as exc:
-        raise StrategyError(f"Failed to fetch bars for {symbol}") from exc
+        raise StrategyError(f"Failed to fetch hourly bars for {symbol}") from exc
 
     now = datetime.now(timezone.utc)
-    complete = [b for b in bars if b.timestamp + BAR_DURATION <= now]
-    return [Decimal(str(b.close)) for b in complete[-count:]]
+    complete = [b for b in bars if b.timestamp + timedelta(hours=1) <= now]
+    return complete[-count:]
 
 
-def check_entry_signal(closes: list[Decimal]) -> bool:
-    if len(closes) < DEFAULT_CLOSES_COUNT:
+def _latest_price(data_client: CryptoHistoricalDataClient, symbol: str) -> Decimal:
+    """Live bid price as "current price" -- mirrors the same convention
+    `exits.check_and_reconcile_exits` already uses for threshold checks.
+    """
+    try:
+        quote = data_client.get_crypto_latest_quote(
+            CryptoLatestQuoteRequest(symbol_or_symbols=symbol)
+        )[symbol]
+    except APIError as exc:
+        raise StrategyError(f"Failed to fetch latest price for {symbol}") from exc
+    return Decimal(str(quote.bid_price))
+
+
+def _bollinger_middle_bands(closes: list[Decimal]) -> tuple[Decimal, Decimal, Decimal]:
+    """Middle/upper/lower Bollinger Bands over the trailing BB_PERIOD closes."""
+    window = closes[-BB_PERIOD:]
+    middle = sum(window) / BB_PERIOD
+    variance = sum((c - middle) ** 2 for c in window) / BB_PERIOD
+    std = variance.sqrt()
+    return middle, middle + BB_STD_MULTIPLIER * std, middle - BB_STD_MULTIPLIER * std
+
+
+def _atr(bars: list) -> Decimal:
+    """Plain rolling mean of true range over the trailing KC_ATR_PERIOD
+    bars -- same formula as `exits.get_atr`, reimplemented locally since
+    this strategy needs it at two different points in time (the prior
+    complete hour and the latest one), not just "right now".
+    """
+    window = bars[-(KC_ATR_PERIOD + 1) :]
+    prev_close = Decimal(str(window[0].close))
+    true_ranges = []
+    for bar in window[1:]:
+        high, low, close = Decimal(str(bar.high)), Decimal(str(bar.low)), Decimal(str(bar.close))
+        true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+        prev_close = close
+    return sum(true_ranges) / KC_ATR_PERIOD
+
+
+def _squeeze_on(closes: list[Decimal], bars: list) -> bool:
+    """True when Bollinger Bands sit fully inside the Keltner Channel --
+    the low-volatility contraction that precedes a breakout."""
+    _, upper_bb, lower_bb = _bollinger_middle_bands(closes)
+    atr = _atr(bars)
+    middle = sum(closes[-BB_PERIOD:]) / BB_PERIOD
+    upper_kc = middle + KC_ATR_MULTIPLIER * atr
+    lower_kc = middle - KC_ATR_MULTIPLIER * atr
+    return lower_bb > lower_kc and upper_bb < upper_kc
+
+
+def check_entry_signal(hourly_bars: list, current_price: Decimal) -> bool:
+    """True only on the hour a squeeze has just released -- squeeze was ON
+    as of the prior complete hour and is OFF as of the latest complete
+    hour -- with `current_price` above the latest basis (middle) line,
+    confirming an upward breakout rather than a downward one.
+    """
+    if len(hourly_bars) < MIN_HOURLY_BARS:
         return False
-    fast = sum(closes[-5:]) / 5
-    slow = sum(closes[-DEFAULT_CLOSES_COUNT:]) / DEFAULT_CLOSES_COUNT
-    return fast > slow
+
+    closes = [Decimal(str(b.close)) for b in hourly_bars]
+
+    squeeze_was_on = _squeeze_on(closes[:-1], hourly_bars[:-1])
+    squeeze_is_on = _squeeze_on(closes, hourly_bars)
+    released = squeeze_was_on and not squeeze_is_on
+
+    middle, _, _ = _bollinger_middle_bands(closes)
+    return released and current_price > middle
 
 
 @dataclass(frozen=True)
@@ -135,8 +208,9 @@ def run_auto_entry_check(
             f"daily_spent=${daily_spent} cap=${daily_cap}",
         )
 
-    closes = get_recent_closes(data_client, symbol)
-    if not check_entry_signal(closes):
+    hourly_bars = get_recent_hourly_bars(data_client, symbol)
+    current_price = _latest_price(data_client, symbol)
+    if not check_entry_signal(hourly_bars, current_price):
         return AutoEntryResult(symbol, "SKIPPED_NO_SIGNAL", "")
 
     available = _crypto_buying_power(client)

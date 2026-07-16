@@ -1,6 +1,6 @@
 # Feature: Telegram two-way bot (commands + notifications)
 
-Status: In Progress (code/tests done; live verification pending real Telegram credentials)
+Status: Done
 Depends on: [004-place-market-order](004-place-market-order.md), [005-monitor-open-positions](005-monitor-open-positions.md), [006-stop-loss-take-profit](006-stop-loss-take-profit.md), [007-scheduled-monitoring](007-scheduled-monitoring.md), [008-manual-close-and-safe-open](008-manual-close-and-safe-open.md), [009-auto-entry-strategy](009-auto-entry-strategy.md)
 Related ADRs: None
 
@@ -239,17 +239,13 @@ business logic" design.
 - [x] `requests` added to `requirements.txt`.
 - [x] README section documenting the supported commands/buttons and how
       to get `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`.
-- [ ] Live verification: `send_message` confirmed delivering a real
-      Telegram message; `/positions` sent from Telegram and processed via
-      `run_cycle`, correct reply logic exercised. `/buy` not forced live
-      by default (places a real paper order) — confirm with the user
-      before exercising it live; its code path is covered by unit tests
-      and shares `open_protected_position`, already verified live in
-      feature 8. **Blocked on real `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`/
-      `DEFAULT_ORDER_NOTIONAL` in `.env`** — not yet provided as of
-      2026-07-11; 130/130 tests pass without them (all mocked), but
-      `load_settings()` will raise `ConfigError` for any real script
-      invocation until they're set.
+- [x] Live verification: real `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`/
+      `DEFAULT_ORDER_NOTIONAL` provided in `.env`. Confirmed live by the
+      user (2026-07-12): `/positions` and `/buy BTC 100` both exercised
+      from Telegram and processed correctly via `run_cycle`; `send_message`
+      confirmed delivering real notifications (auto-entry `ENTERED`
+      messages received for two live paper trades once
+      `AUTO_ENTRY_ENABLED` was turned on).
 
 ## Open Questions
 

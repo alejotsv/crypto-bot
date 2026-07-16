@@ -175,7 +175,7 @@ def _handle_positions(client: TradingClient) -> str:
     if not positions:
         return "No open positions."
 
-    return "\n".join(
-        f"{p.symbol}  qty={p.qty}  side={p.side}  entry={p.avg_entry_price}  pl=${p.unrealized_pl}"
+    return "\n\n".join(
+        f"{p.symbol}  qty={p.qty}  entry=${p.avg_entry_price}  pl=${p.unrealized_pl}"
         for p in positions
     )

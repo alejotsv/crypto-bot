@@ -68,7 +68,7 @@ def test_run_reconcile_cycle_logs_and_notifies_each_action(monkeypatch, caplog):
     send_mock.assert_called_once()
     notified_text = send_mock.call_args.args[1]
     assert "BTC/USD" in notified_text
-    assert "TAKE_PROFIT_REALIZED" in notified_text
+    assert "Take-profit hit" in notified_text
 
 
 def test_run_reconcile_cycle_skips_auto_entry_when_disabled(monkeypatch):
@@ -102,6 +102,7 @@ def test_run_reconcile_cycle_runs_auto_entry_and_notifies_when_enabled(monkeypat
     assert "ETH/USD" not in caplog.text
     send_mock.assert_called_once()
     assert "BTC/USD" in send_mock.call_args.args[1]
+    assert "Entered" in send_mock.call_args.args[1]
 
 
 # --- Telegram command processing ---

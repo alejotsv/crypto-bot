@@ -11,8 +11,10 @@ from crypto_bot.positions import OpenPosition
 from crypto_bot.trading import OpenedPosition, TradingError
 
 
-def make_bar(close, timestamp):
-    return SimpleNamespace(close=close, timestamp=timestamp)
+def make_bar(close, timestamp, high=None, low=None):
+    high = close if high is None else high
+    low = close if low is None else low
+    return SimpleNamespace(close=close, high=high, low=low, timestamp=timestamp)
 
 
 def make_position(symbol="BTCUSD"):
@@ -38,57 +40,91 @@ def stub_spend_state(monkeypatch):
     monkeypatch.setattr(strategy, "save_state", Mock())
 
 
-# --- check_entry_signal ---
+def _flat_bars(count, price=Decimal("100"), spread=Decimal("0.1"), start=None):
+    """`count` hourly bars with a constant close and a small, constant
+    high/low spread around it -- a deterministic low-volatility squeeze
+    (near-zero Bollinger std, small but nonzero ATR)."""
+    start = start or datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return [
+        make_bar(price, start + timedelta(hours=i), high=price + spread, low=price - spread)
+        for i in range(count)
+    ]
 
 
-def test_check_entry_signal_true_when_fast_above_slow():
-    closes = [Decimal("100")] * 15 + [Decimal("110")] * 5
-    assert strategy.check_entry_signal(closes) is True
+# --- check_entry_signal (Bollinger squeeze breakout) ---
 
 
-def test_check_entry_signal_false_when_fast_below_slow():
-    closes = [Decimal("100")] * 15 + [Decimal("90")] * 5
-    assert strategy.check_entry_signal(closes) is False
+def test_check_entry_signal_true_on_release_with_price_above_middle():
+    # 20 flat bars (squeeze ON: near-zero BB std, small ATR keeps Keltner
+    # just outside the tight bands) followed by one sharp breakout bar --
+    # bands expand well past the Keltner channel, releasing the squeeze.
+    bars = _flat_bars(20) + [
+        make_bar(Decimal("110"), datetime(2026, 1, 1, 20, tzinfo=timezone.utc), high=Decimal("111"), low=Decimal("109"))
+    ]
+    assert strategy.check_entry_signal(bars, Decimal("110")) is True
 
 
-def test_check_entry_signal_false_when_equal():
-    closes = [Decimal("100")] * 20
-    assert strategy.check_entry_signal(closes) is False
+def test_check_entry_signal_false_when_price_below_middle_on_release():
+    bars = _flat_bars(20) + [
+        make_bar(Decimal("110"), datetime(2026, 1, 1, 20, tzinfo=timezone.utc), high=Decimal("111"), low=Decimal("109"))
+    ]
+    # Squeeze still releases (bands still expand), but the live price used
+    # for the direction check has since dropped back below the basis line.
+    assert strategy.check_entry_signal(bars, Decimal("90")) is False
 
 
-def test_check_entry_signal_false_with_fewer_than_20_closes():
-    closes = [Decimal("100")] * 19
-    assert strategy.check_entry_signal(closes) is False
+def test_check_entry_signal_false_when_squeeze_never_releases():
+    bars = _flat_bars(21)
+    assert strategy.check_entry_signal(bars, Decimal("100")) is False
 
 
-# --- get_recent_closes ---
+def test_check_entry_signal_false_with_too_few_bars():
+    bars = _flat_bars(strategy.MIN_HOURLY_BARS - 1)
+    assert strategy.check_entry_signal(bars, Decimal("100")) is False
 
 
-def test_get_recent_closes_drops_still_forming_trailing_bar():
+# --- get_recent_hourly_bars ---
+
+
+def test_get_recent_hourly_bars_drops_still_forming_trailing_bar():
     now = datetime.now(timezone.utc)
     bars = [
-        make_bar(Decimal(str(100 + i)), now - timedelta(minutes=5 * (21 - i)))
+        make_bar(Decimal(str(100 + i)), now - timedelta(hours=(21 - i)))
         for i in range(20)
     ]
-    # Still-forming current bar -- its 5-minute window hasn't elapsed yet.
-    bars.append(make_bar(Decimal("999"), now - timedelta(seconds=30)))
+    # Still-forming current bar -- its hour hasn't elapsed yet.
+    bars.append(make_bar(Decimal("999"), now - timedelta(minutes=5)))
 
     data_client = Mock()
     data_client.get_crypto_bars.return_value = SimpleNamespace(data={"BTC/USD": bars})
 
-    closes = strategy.get_recent_closes(data_client, "BTC/USD", count=20)
+    hourly_bars = strategy.get_recent_hourly_bars(data_client, "BTC/USD", count=20)
 
-    assert Decimal("999") not in closes
-    assert len(closes) == 20
+    assert all(b.close != Decimal("999") for b in hourly_bars)
+    assert len(hourly_bars) == 20
 
 
-def test_get_recent_closes_returns_empty_list_for_missing_symbol():
+def test_get_recent_hourly_bars_returns_empty_list_for_missing_symbol():
     data_client = Mock()
     data_client.get_crypto_bars.return_value = SimpleNamespace(data={})
 
-    closes = strategy.get_recent_closes(data_client, "BTC/USD")
+    hourly_bars = strategy.get_recent_hourly_bars(data_client, "BTC/USD")
 
-    assert closes == []
+    assert hourly_bars == []
+
+
+# --- _latest_price ---
+
+
+def test_latest_price_uses_bid_price():
+    data_client = Mock()
+    data_client.get_crypto_latest_quote.return_value = {
+        "BTC/USD": SimpleNamespace(bid_price="64000.12")
+    }
+
+    price = strategy._latest_price(data_client, "BTC/USD")
+
+    assert price == Decimal("64000.12")
 
 
 # --- run_auto_entry_check ---
@@ -107,7 +143,8 @@ def test_run_auto_entry_check_skips_when_already_open(monkeypatch):
 
 def test_run_auto_entry_check_skips_when_no_signal(monkeypatch):
     monkeypatch.setattr(strategy, "get_open_positions", Mock(return_value=[]))
-    monkeypatch.setattr(strategy, "get_recent_closes", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "get_recent_hourly_bars", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "_latest_price", Mock(return_value=Decimal("100")))
     monkeypatch.setattr(strategy, "check_entry_signal", Mock(return_value=False))
     buying_power_mock = Mock()
     monkeypatch.setattr(strategy, "_crypto_buying_power", buying_power_mock)
@@ -120,7 +157,8 @@ def test_run_auto_entry_check_skips_when_no_signal(monkeypatch):
 
 def test_run_auto_entry_check_skips_when_insufficient_funds(monkeypatch):
     monkeypatch.setattr(strategy, "get_open_positions", Mock(return_value=[]))
-    monkeypatch.setattr(strategy, "get_recent_closes", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "get_recent_hourly_bars", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "_latest_price", Mock(return_value=Decimal("100")))
     monkeypatch.setattr(strategy, "check_entry_signal", Mock(return_value=True))
     monkeypatch.setattr(strategy, "_crypto_buying_power", Mock(return_value=Decimal("5")))
     open_mock = Mock()
@@ -136,7 +174,8 @@ def test_run_auto_entry_check_skips_when_insufficient_funds(monkeypatch):
 
 def test_run_auto_entry_check_enters_when_signal_and_funds_ok(monkeypatch):
     monkeypatch.setattr(strategy, "get_open_positions", Mock(return_value=[]))
-    monkeypatch.setattr(strategy, "get_recent_closes", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "get_recent_hourly_bars", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "_latest_price", Mock(return_value=Decimal("100")))
     monkeypatch.setattr(strategy, "check_entry_signal", Mock(return_value=True))
     monkeypatch.setattr(strategy, "_crypto_buying_power", Mock(return_value=Decimal("100")))
 
@@ -156,7 +195,8 @@ def test_run_auto_entry_check_enters_when_signal_and_funds_ok(monkeypatch):
 
 def test_run_auto_entry_check_returns_order_not_filled_on_trading_error(monkeypatch):
     monkeypatch.setattr(strategy, "get_open_positions", Mock(return_value=[]))
-    monkeypatch.setattr(strategy, "get_recent_closes", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "get_recent_hourly_bars", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "_latest_price", Mock(return_value=Decimal("100")))
     monkeypatch.setattr(strategy, "check_entry_signal", Mock(return_value=True))
     monkeypatch.setattr(strategy, "_crypto_buying_power", Mock(return_value=Decimal("100")))
     monkeypatch.setattr(
@@ -225,7 +265,8 @@ def test_run_auto_entry_check_total_cap_disabled_when_zero(monkeypatch):
         "load_state",
         Mock(return_value=SpendState(Decimal("999999"), Decimal("0"), date.min)),
     )
-    monkeypatch.setattr(strategy, "get_recent_closes", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "get_recent_hourly_bars", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "_latest_price", Mock(return_value=Decimal("100")))
     monkeypatch.setattr(strategy, "check_entry_signal", Mock(return_value=False))
 
     result = strategy.run_auto_entry_check(
@@ -263,7 +304,8 @@ def test_run_auto_entry_check_daily_cap_uses_zero_for_stale_date(monkeypatch):
         "load_state",
         Mock(return_value=SpendState(Decimal("500"), Decimal("199"), date(2020, 1, 1))),
     )
-    monkeypatch.setattr(strategy, "get_recent_closes", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "get_recent_hourly_bars", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "_latest_price", Mock(return_value=Decimal("100")))
     monkeypatch.setattr(strategy, "check_entry_signal", Mock(return_value=False))
 
     result = strategy.run_auto_entry_check(
@@ -283,7 +325,8 @@ def test_run_auto_entry_check_records_spend_on_entry(monkeypatch):
     )
     save_mock = Mock()
     monkeypatch.setattr(strategy, "save_state", save_mock)
-    monkeypatch.setattr(strategy, "get_recent_closes", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "get_recent_hourly_bars", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "_latest_price", Mock(return_value=Decimal("100")))
     monkeypatch.setattr(strategy, "check_entry_signal", Mock(return_value=True))
     monkeypatch.setattr(strategy, "_crypto_buying_power", Mock(return_value=Decimal("100")))
     opened = OpenedPosition(

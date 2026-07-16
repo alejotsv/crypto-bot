@@ -2,7 +2,7 @@
 
 Status: Done
 Depends on: [003-fetch-live-price-data](003-fetch-live-price-data.md), [004-place-market-order](004-place-market-order.md), [005-monitor-open-positions](005-monitor-open-positions.md), [006-stop-loss-take-profit](006-stop-loss-take-profit.md), [008-manual-close-and-safe-open](008-manual-close-and-safe-open.md)
-Related ADRs: [0006-optional-auto-entry-spending-caps](../adr/0006-optional-auto-entry-spending-caps.md)
+Related ADRs: [0006-optional-auto-entry-spending-caps](../adr/0006-optional-auto-entry-spending-caps.md), [0007-bollinger-squeeze-breakout-entry-signal](../adr/0007-bollinger-squeeze-breakout-entry-signal.md)
 
 ## Summary
 
@@ -32,6 +32,18 @@ Every prior feature (4, 5, 6, 8) already exists and is reused as-is:
 this feature is the signal-and-gate logic that decides *when* to call
 `trading.open_protected_position` (feature 8) automatically, the same
 function a future Telegram `/buy` command will call for manual entries.
+
+**Update (2026-07-13), see ADR 0007:** the signal described in the rest
+of this spec (5/20 SMA crossover on 5-minute bars) is the *original*
+design and is kept below as the historical record. It has been replaced
+in the actual code by a Bollinger squeeze breakout signal on hourly
+bars, after backtesting showed the original signal below breakeven and
+9 candidate strategies were evaluated — see ADR 0007 for the full
+rationale, evidence, and the exact current function signatures
+(`get_recent_hourly_bars`, `check_entry_signal(hourly_bars,
+current_price)`, `_latest_price`). Everything else in this spec (the
+6-symbol list, gating logic, spending caps, buying-power check) is
+still accurate and unchanged.
 
 ## Goals
 
@@ -71,8 +83,14 @@ function a future Telegram `/buy` command will call for manual entries.
   list above is a hardcoded constant reflecting a deliberate, curated
   choice made in conversation, not a `.env`-configurable list. Making it
   configurable is future work if the user asks (see Out of Scope).
-- No other entry signals (RSI, breakout, etc.) — 5/20-period SMA
-  crossover only, for now.
+- ~~No other entry signals (RSI, breakout, etc.) — 5/20-period SMA
+  crossover only, for now.~~ **Superseded 2026-07-13, see ADR 0007**:
+  after the 5/20 crossover backtested below breakeven and an ad-hoc fix
+  failed out-of-sample, 9 established entry strategies were backtested
+  across 3 non-overlapping historical windows; the entry signal is now
+  Bollinger squeeze breakout (the best-performing candidate found, with
+  an explicit caveat — see ADR 0007 for why it's a compromise, not a
+  validated winner).
 - No selling/shorting signal — this feature only decides long entries
   (Alpaca crypto is spot-only per feature 8's `open_protected_position`
   docstring); exits remain entirely feature 6's job (SL/TP), regardless

@@ -61,6 +61,6 @@ if __name__ == "__main__":
     else:
         for p in positions:
             print(
-                f"{p.symbol}  qty={p.qty}  side={p.side}  "
-                f"entry={p.avg_entry_price}  unrealized_pl={p.unrealized_pl}"
+                f"{p.symbol}  qty={p.qty}  "
+                f"entry=${p.avg_entry_price}  unrealized_pl={p.unrealized_pl}"
             )
