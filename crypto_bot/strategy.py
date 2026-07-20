@@ -19,7 +19,7 @@ auto-entered position gets its stop-loss attached the instant it opens,
 exactly like a manual one.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Literal
@@ -156,6 +156,11 @@ class AutoEntryResult:
         "ORDER_NOT_FILLED",
     ]
     detail: str
+    # True only on the cycle a cap transitions from not-blocking to
+    # blocking (feature 11) -- run_cycle.py notifies on this, not on
+    # every repeat SKIPPED_TOTAL_CAP_REACHED/SKIPPED_DAILY_CAP_REACHED
+    # while still capped.
+    notify: bool = False
 
 
 def _crypto_buying_power(client: TradingClient) -> Decimal:
@@ -193,19 +198,31 @@ def run_auto_entry_check(
     today = datetime.now(timezone.utc).date()
     spend_state = load_state()
 
-    if total_cap > 0 and spend_state.total_spent + notional > total_cap:
+    was_total_notified = spend_state.total_cap_notified
+    total_capped = total_cap > 0 and spend_state.total_spent + notional > total_cap
+    if total_capped != was_total_notified:
+        spend_state = replace(spend_state, total_cap_notified=total_capped)
+        save_state(spend_state)
+    if total_capped:
         return AutoEntryResult(
             symbol,
             "SKIPPED_TOTAL_CAP_REACHED",
-            f"total_spent=${spend_state.total_spent} cap=${total_cap}",
+            f"total_spent=${spend_state.total_spent:,} cap=${total_cap:,}",
+            notify=not was_total_notified,
         )
 
     daily_spent = effective_daily_spent(spend_state, today)
-    if daily_cap > 0 and daily_spent + notional > daily_cap:
+    was_daily_notified = spend_state.daily_cap_notified
+    daily_capped = daily_cap > 0 and daily_spent + notional > daily_cap
+    if daily_capped != was_daily_notified:
+        spend_state = replace(spend_state, daily_cap_notified=daily_capped)
+        save_state(spend_state)
+    if daily_capped:
         return AutoEntryResult(
             symbol,
             "SKIPPED_DAILY_CAP_REACHED",
-            f"daily_spent=${daily_spent} cap=${daily_cap}",
+            f"daily_spent=${daily_spent:,} cap=${daily_cap:,}",
+            notify=not was_daily_notified,
         )
 
     hourly_bars = get_recent_hourly_bars(data_client, symbol)
@@ -218,7 +235,7 @@ def run_auto_entry_check(
         return AutoEntryResult(
             symbol,
             "SKIPPED_INSUFFICIENT_FUNDS",
-            f"available=${available} required=${notional}",
+            f"available=${available:,} required=${notional:,}",
         )
 
     try:
@@ -231,7 +248,7 @@ def run_auto_entry_check(
     return AutoEntryResult(
         symbol,
         "ENTERED",
-        f"filled {opened.order.filled_qty} @ {opened.order.filled_avg_price}",
+        f"filled {opened.order.filled_qty} @ {opened.order.filled_avg_price:,}",
     )
 
 

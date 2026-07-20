@@ -105,6 +105,53 @@ def test_run_reconcile_cycle_runs_auto_entry_and_notifies_when_enabled(monkeypat
     assert "Entered" in send_mock.call_args.args[1]
 
 
+def test_run_reconcile_cycle_notifies_on_first_time_cap_reached(monkeypatch):
+    monkeypatch.setattr(run_cycle, "load_settings", Mock(return_value=_stub_settings(True)))
+    monkeypatch.setattr(
+        run_cycle,
+        "run_auto_entry_cycle",
+        Mock(return_value=[
+            AutoEntryResult(
+                symbol="BTC/USD",
+                action="SKIPPED_TOTAL_CAP_REACHED",
+                detail="total_spent=$1,000 cap=$1,000",
+                notify=True,
+            ),
+        ]),
+    )
+    send_mock = Mock()
+    monkeypatch.setattr(run_cycle, "send_message", send_mock)
+
+    run_cycle.run_reconcile_cycle()
+
+    send_mock.assert_called_once()
+    notified_text = send_mock.call_args.args[1]
+    assert "BTC/USD" in notified_text
+    assert "total spending cap reached" in notified_text
+
+
+def test_run_reconcile_cycle_does_not_renotify_cap_reached(monkeypatch):
+    monkeypatch.setattr(run_cycle, "load_settings", Mock(return_value=_stub_settings(True)))
+    monkeypatch.setattr(
+        run_cycle,
+        "run_auto_entry_cycle",
+        Mock(return_value=[
+            AutoEntryResult(
+                symbol="BTC/USD",
+                action="SKIPPED_TOTAL_CAP_REACHED",
+                detail="total_spent=$1,000 cap=$1,000",
+                notify=False,
+            ),
+        ]),
+    )
+    send_mock = Mock()
+    monkeypatch.setattr(run_cycle, "send_message", send_mock)
+
+    run_cycle.run_reconcile_cycle()
+
+    send_mock.assert_not_called()
+
+
 # --- Telegram command processing ---
 
 

@@ -68,3 +68,30 @@ def test_record_spend_rolls_over_daily_on_new_date():
     assert updated.total_spent == Decimal("160")
     assert updated.daily_spent == Decimal("10")
     assert updated.daily_date == date(2026, 7, 11)
+
+
+def test_save_and_load_state_round_trips_cap_notified_flags():
+    state = spend.SpendState(
+        total_spent=Decimal("150"),
+        daily_spent=Decimal("50"),
+        daily_date=date(2026, 7, 11),
+        total_cap_notified=True,
+        daily_cap_notified=False,
+    )
+    spend.save_state(state)
+
+    loaded = spend.load_state()
+
+    assert loaded == state
+
+
+def test_load_state_defaults_cap_notified_flags_for_legacy_file():
+    # A state file written before feature 11 existed has neither key.
+    spend.STATE_PATH.write_text(
+        '{"total_spent": "150", "daily_spent": "50", "daily_date": "2026-07-11"}'
+    )
+
+    loaded = spend.load_state()
+
+    assert loaded.total_cap_notified is False
+    assert loaded.daily_cap_notified is False

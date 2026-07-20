@@ -26,6 +26,13 @@ logger = logging.getLogger(__name__)
 _ENTRY_MESSAGES = {
     "ENTERED": "Entered",
     "SKIPPED_INSUFFICIENT_FUNDS": "Skipped (insufficient funds)",
+    "SKIPPED_TOTAL_CAP_REACHED": (
+        "Auto-entry paused -- total spending cap reached (raise/disable "
+        "AUTO_ENTRY_TOTAL_CAP, or reset the state file, to resume)"
+    ),
+    "SKIPPED_DAILY_CAP_REACHED": (
+        "Auto-entry paused -- daily spending cap reached (resets automatically at UTC midnight)"
+    ),
 }
 _RECONCILE_MESSAGES = {
     "STOP_LOSS_FILLED": "Stop-loss hit",
@@ -74,7 +81,7 @@ def run_reconcile_cycle() -> None:
     if settings.auto_entry_enabled:
         entry_results = run_auto_entry_cycle(client, data_client, settings)
         for result in entry_results:
-            if result.action in ("ENTERED", "SKIPPED_INSUFFICIENT_FUNDS"):
+            if result.action in ("ENTERED", "SKIPPED_INSUFFICIENT_FUNDS") or result.notify:
                 logger.info(
                     "Auto-entry cycle: %s %s -- %s", result.symbol, result.action, result.detail
                 )

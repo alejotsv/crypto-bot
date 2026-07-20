@@ -216,7 +216,7 @@ def test_reconcile_notifies_and_cleans_up_when_stop_loss_filled_on_its_own():
 
     assert len(result) == 1
     assert result[0].action == "STOP_LOSS_FILLED"
-    assert "63750" in result[0].detail
+    assert "63,750" in result[0].detail
     assert "0.5" in result[0].detail
     client.cancel_order_by_id.assert_not_called()
     client.submit_order.assert_not_called()

@@ -59,7 +59,7 @@ def _normalize_symbol(raw: str) -> str:
 
 
 def _buy_button_label(settings: Settings) -> str:
-    return f"Buy {settings.default_order_symbol} (${settings.default_order_notional})"
+    return f"Buy {settings.default_order_symbol} (${settings.default_order_notional:,})"
 
 
 def _buy_button_prefix(settings: Settings) -> str:
@@ -177,6 +177,6 @@ def _handle_positions(client: TradingClient) -> str:
         return "No open positions."
 
     return "\n\n".join(
-        f"{p.symbol}  qty={p.qty}  entry=${p.avg_entry_price}  pl=${p.unrealized_pl}"
+        f"{p.symbol}  qty={p.qty}  entry=${p.avg_entry_price:,}  pl=${p.unrealized_pl:,}"
         for p in positions
     )

@@ -22,6 +22,12 @@ class SpendState:
     total_spent: Decimal
     daily_spent: Decimal
     daily_date: date
+    # Whether a Telegram notification has already been sent for the
+    # *current* capped episode (feature 11) -- reset to False the moment
+    # the corresponding cap stops blocking, so the next time it blocks
+    # again counts as a new episode and notifies again.
+    total_cap_notified: bool = False
+    daily_cap_notified: bool = False
 
 
 def load_state() -> SpendState:
@@ -32,6 +38,8 @@ def load_state() -> SpendState:
         total_spent=Decimal(data["total_spent"]),
         daily_spent=Decimal(data["daily_spent"]),
         daily_date=date.fromisoformat(data["daily_date"]),
+        total_cap_notified=data.get("total_cap_notified", False),
+        daily_cap_notified=data.get("daily_cap_notified", False),
     )
 
 
@@ -42,6 +50,8 @@ def save_state(state: SpendState) -> None:
                 "total_spent": str(state.total_spent),
                 "daily_spent": str(state.daily_spent),
                 "daily_date": state.daily_date.isoformat(),
+                "total_cap_notified": state.total_cap_notified,
+                "daily_cap_notified": state.daily_cap_notified,
             }
         )
     )

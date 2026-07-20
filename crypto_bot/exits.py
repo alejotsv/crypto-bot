@@ -191,7 +191,7 @@ def check_and_reconcile_exits(
             actions.append(ReconcileAction(
                 symbol=symbol, action="STOP_LOSS_FILLED",
                 detail=(
-                    f"stop-loss filled at {stop_loss_order.filled_avg_price} "
+                    f"stop-loss filled at {Decimal(str(stop_loss_order.filled_avg_price)):,} "
                     f"(qty {stop_loss_order.filled_qty})"
                 ),
             ))
@@ -220,7 +220,7 @@ def check_and_reconcile_exits(
             ))
             actions.append(ReconcileAction(
                 symbol=symbol, action="TAKE_PROFIT_REALIZED",
-                detail=f"price {current_price} reached target {target_price} -- sold at market",
+                detail=f"price {current_price:,} reached target {target_price:,} -- sold at market",
             ))
             remove_protective_orders(symbol)
             continue
@@ -233,8 +233,8 @@ def check_and_reconcile_exits(
             actions.append(ReconcileAction(
                 symbol=symbol, action="FORCED_MARKET_SELL",
                 detail=(
-                    f"stop-loss stuck unfilled at price {current_price} "
-                    f"(trigger {stop_price}) -- forced market sell"
+                    f"stop-loss stuck unfilled at price {current_price:,} "
+                    f"(trigger {stop_price:,}) -- forced market sell"
                 ),
             ))
             remove_protective_orders(symbol)

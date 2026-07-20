@@ -16,8 +16,30 @@ is created, approved, or implemented. Status values: `Not started`,
 | 8 | Manual close, and a safe combined open-and-protect action | `specs/features/008-manual-close-and-safe-open.md` | Done |
 | 9 | Automated entry strategy | `specs/features/009-auto-entry-strategy.md` | Done |
 | 10 | Telegram two-way bot (commands + notifications) | `specs/features/010-telegram-bot.md` | Done |
+| 11 | Auto-entry cap-reached notifications | `specs/features/011-cap-reached-notifications.md` | Done |
 
 ## Notes
+
+- **2026-07-20, feature 11 implemented:** `SpendState` gained
+  `total_cap_notified`/`daily_cap_notified` booleans (default `False`,
+  backward-compatible with pre-existing state files). Each cap check now
+  compares the fresh capped/not-capped result against the stored flag:
+  a False-to-True transition sets `AutoEntryResult.notify=True` (and
+  persists the flag) so `run_cycle.py` sends exactly one Telegram
+  message per capped episode; a True-to-False transition (cap
+  raised/disabled, spend reset, or the daily cap's own UTC-midnight
+  rollover) re-arms the flag with no special-cased rollover logic
+  needed. 141/141 tests passing (10 new, covering first-notify,
+  no-repeat, and re-arm for both caps).
+- **2026-07-20, feature 11 drafted:** the total cap (ADR 0006) had been
+  silently blocking every auto-entry for 5 days (reached 2026-07-15,
+  discovered 2026-07-20) — `SKIPPED_TOTAL_CAP_REACHED`/
+  `SKIPPED_DAILY_CAP_REACHED` were never logged or Telegram-notified,
+  exactly the gap ADR 0006's Consequences section had already flagged
+  as worth revisiting. Total cap set to `0` (disabled) on the Pi in the
+  meantime as an immediate unblock, independent of this spec. Bundled
+  into this spec at the user's request: thousands-separator formatting
+  for dollar amounts across Telegram messages generally.
 
 - **2026-07-13, feature 9's entry signal replaced (ADR 0007):** the
   original 5/20 SMA crossover backtested below breakeven (28.3% win

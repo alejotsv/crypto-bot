@@ -254,7 +254,7 @@ def test_run_auto_entry_check_skips_when_total_cap_reached(monkeypatch):
 
     assert result.action == "SKIPPED_TOTAL_CAP_REACHED"
     assert "total_spent=$995" in result.detail
-    assert "cap=$1000" in result.detail
+    assert "cap=$1,000" in result.detail
     signal_mock.assert_not_called()
 
 
@@ -314,6 +314,148 @@ def test_run_auto_entry_check_daily_cap_uses_zero_for_stale_date(monkeypatch):
 
     # Stale daily_date means effective daily spend is 0, not 199 -- doesn't trip the cap.
     assert result.action == "SKIPPED_NO_SIGNAL"
+
+
+# --- Feature 11: notify-once-per-episode on cap reached ---
+
+
+def test_run_auto_entry_check_total_cap_reached_notifies_first_time(monkeypatch):
+    monkeypatch.setattr(strategy, "get_open_positions", Mock(return_value=[]))
+    monkeypatch.setattr(
+        strategy,
+        "load_state",
+        Mock(return_value=SpendState(
+            Decimal("995"), Decimal("0"), date.min, total_cap_notified=False
+        )),
+    )
+    save_mock = Mock()
+    monkeypatch.setattr(strategy, "save_state", save_mock)
+
+    result = strategy.run_auto_entry_check(
+        Mock(), Mock(), "BTC/USD", Decimal("10"), total_cap=Decimal("1000")
+    )
+
+    assert result.action == "SKIPPED_TOTAL_CAP_REACHED"
+    assert result.notify is True
+    assert save_mock.call_args.args[0].total_cap_notified is True
+
+
+def test_run_auto_entry_check_total_cap_reached_does_not_renotify(monkeypatch):
+    monkeypatch.setattr(strategy, "get_open_positions", Mock(return_value=[]))
+    monkeypatch.setattr(
+        strategy,
+        "load_state",
+        Mock(return_value=SpendState(
+            Decimal("995"), Decimal("0"), date.min, total_cap_notified=True
+        )),
+    )
+    save_mock = Mock()
+    monkeypatch.setattr(strategy, "save_state", save_mock)
+
+    result = strategy.run_auto_entry_check(
+        Mock(), Mock(), "BTC/USD", Decimal("10"), total_cap=Decimal("1000")
+    )
+
+    assert result.action == "SKIPPED_TOTAL_CAP_REACHED"
+    assert result.notify is False
+    save_mock.assert_not_called()
+
+
+def test_run_auto_entry_check_total_cap_rearms_once_no_longer_capped(monkeypatch):
+    monkeypatch.setattr(strategy, "get_open_positions", Mock(return_value=[]))
+    monkeypatch.setattr(
+        strategy,
+        "load_state",
+        Mock(return_value=SpendState(
+            Decimal("0"), Decimal("0"), date.min, total_cap_notified=True
+        )),
+    )
+    monkeypatch.setattr(strategy, "get_recent_hourly_bars", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "_latest_price", Mock(return_value=Decimal("100")))
+    monkeypatch.setattr(strategy, "check_entry_signal", Mock(return_value=False))
+    save_mock = Mock()
+    monkeypatch.setattr(strategy, "save_state", save_mock)
+
+    result = strategy.run_auto_entry_check(
+        Mock(), Mock(), "BTC/USD", Decimal("10"), total_cap=Decimal("1000")
+    )
+
+    # No longer capped (spend reset/cap raised past current spend) -- this
+    # cycle doesn't notify, but the flag re-arms so a future capping does.
+    assert result.action == "SKIPPED_NO_SIGNAL"
+    assert save_mock.call_args.args[0].total_cap_notified is False
+
+
+def test_run_auto_entry_check_daily_cap_reached_notifies_first_time(monkeypatch):
+    monkeypatch.setattr(strategy, "get_open_positions", Mock(return_value=[]))
+    today = datetime.now(timezone.utc).date()
+    monkeypatch.setattr(
+        strategy,
+        "load_state",
+        Mock(return_value=SpendState(
+            Decimal("50"), Decimal("195"), today, daily_cap_notified=False
+        )),
+    )
+    save_mock = Mock()
+    monkeypatch.setattr(strategy, "save_state", save_mock)
+
+    result = strategy.run_auto_entry_check(
+        Mock(), Mock(), "BTC/USD", Decimal("10"), total_cap=Decimal("0"), daily_cap=Decimal("200")
+    )
+
+    assert result.action == "SKIPPED_DAILY_CAP_REACHED"
+    assert result.notify is True
+    assert save_mock.call_args.args[0].daily_cap_notified is True
+
+
+def test_run_auto_entry_check_daily_cap_reached_does_not_renotify(monkeypatch):
+    monkeypatch.setattr(strategy, "get_open_positions", Mock(return_value=[]))
+    today = datetime.now(timezone.utc).date()
+    monkeypatch.setattr(
+        strategy,
+        "load_state",
+        Mock(return_value=SpendState(
+            Decimal("50"), Decimal("195"), today, daily_cap_notified=True
+        )),
+    )
+    save_mock = Mock()
+    monkeypatch.setattr(strategy, "save_state", save_mock)
+
+    result = strategy.run_auto_entry_check(
+        Mock(), Mock(), "BTC/USD", Decimal("10"), total_cap=Decimal("0"), daily_cap=Decimal("200")
+    )
+
+    assert result.action == "SKIPPED_DAILY_CAP_REACHED"
+    assert result.notify is False
+    save_mock.assert_not_called()
+
+
+def test_run_auto_entry_check_daily_cap_rearms_on_utc_rollover(monkeypatch):
+    """A daily_cap_notified=True flag from a prior day re-arms purely as a
+    side effect of the existing not-capped-transition rule, once the
+    stale daily_date makes effective_daily_spent 0 again -- no
+    special-cased rollover handling needed (see spec 011's design note).
+    """
+    monkeypatch.setattr(strategy, "get_open_positions", Mock(return_value=[]))
+    monkeypatch.setattr(
+        strategy,
+        "load_state",
+        Mock(return_value=SpendState(
+            Decimal("500"), Decimal("199"), date(2020, 1, 1), daily_cap_notified=True
+        )),
+    )
+    monkeypatch.setattr(strategy, "get_recent_hourly_bars", Mock(return_value=[]))
+    monkeypatch.setattr(strategy, "_latest_price", Mock(return_value=Decimal("100")))
+    monkeypatch.setattr(strategy, "check_entry_signal", Mock(return_value=False))
+    save_mock = Mock()
+    monkeypatch.setattr(strategy, "save_state", save_mock)
+
+    result = strategy.run_auto_entry_check(
+        Mock(), Mock(), "BTC/USD", Decimal("10"), total_cap=Decimal("0"), daily_cap=Decimal("200")
+    )
+
+    assert result.action == "SKIPPED_NO_SIGNAL"
+    assert save_mock.call_args.args[0].daily_cap_notified is False
 
 
 def test_run_auto_entry_check_records_spend_on_entry(monkeypatch):
